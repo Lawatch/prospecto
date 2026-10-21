@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { api, isLocal, downloadApi } from './api.js';
 import { esc, on, toastError } from './ui.js';
 
 const ROUTES = [
@@ -42,11 +42,11 @@ function layout() {
   app.innerHTML = `
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><img src="/favicon.svg" alt=""> Prospecto</div>
+      <div class="brand"><img src="favicon.svg" alt=""> Prospecto</div>
       <nav class="nav" id="nav"></nav>
       <div class="sidebar-foot">
         <div id="send-status" class="small"></div>
-        <button class="sm ghost" id="logout" style="color:#8a92a6">Se déconnecter</button>
+        ${isLocal ? '<div style="margin-top:8px">Données enregistrées dans ce navigateur</div>' : '<button class="sm ghost" id="logout" style="color:#8a92a6">Se déconnecter</button>'}
       </div>
     </aside>
     <div class="main">
@@ -59,7 +59,7 @@ function layout() {
       <main class="content" id="page"></main>
     </div>
   </div>`;
-  document.getElementById('logout').addEventListener('click', async () => {
+  document.getElementById('logout')?.addEventListener('click', async () => {
     await api.post('/api/auth/logout');
     location.hash = '';
     boot();
@@ -78,6 +78,15 @@ function layout() {
     }, 200);
   });
   on(results, 'click', 'a', () => { results.hidden = true; quick.value = ''; });
+  // Version en ligne : les liens de téléchargement /api/... sont servis par la page elle-même.
+  if (isLocal) {
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest('a[href^="/api/"]');
+      if (!a) return;
+      e.preventDefault();
+      downloadApi(a.getAttribute('href'), a.dataset.filename || a.textContent.trim() || 'fichier').catch(toastError);
+    });
+  }
   document.addEventListener('click', (e) => { if (!e.target.closest('.quick')) results.hidden = true; });
 }
 
@@ -130,7 +139,7 @@ async function render() {
 function authScreen(setupNeeded) {
   app.innerHTML = `
   <div class="auth"><div class="card">
-    <div class="brand" style="color:var(--text);padding:0 0 12px"><img src="/favicon.svg" alt=""> Prospecto</div>
+    <div class="brand" style="color:var(--text);padding:0 0 12px"><img src="favicon.svg" alt=""> Prospecto</div>
     <h2>${setupNeeded ? 'Bienvenue ! Créez votre mot de passe' : 'Connexion'}</h2>
     <p class="muted small">${setupNeeded ? 'Il protège l\'accès à vos données sur cet ordinateur. Vous resterez connecté 30 jours.' : 'Vos données restent sur cet ordinateur.'}</p>
     <form id="auth-form">
@@ -160,7 +169,23 @@ function authScreen(setupNeeded) {
 }
 
 let booted = false;
+// Un seul onglet à la fois : deux onglets écraseraient mutuellement leurs enregistrements.
+async function acquireTabLock() {
+  if (!isLocal || !navigator.locks) return true;
+  return new Promise((resolve) => {
+    navigator.locks.request('prospecto-onglet', { ifAvailable: true }, (lock) => {
+      if (!lock) { resolve(false); return undefined; }
+      resolve(true);
+      return new Promise(() => {});
+    });
+  });
+}
+
 async function boot() {
+  if (!booted && !(await acquireTabLock())) {
+    app.innerHTML = '<div class="auth"><div class="card"><h2>Prospecto est déjà ouvert</h2><p>Prospecto est ouvert dans un autre onglet de ce navigateur. Utilisez cet onglet-là (deux onglets ouverts en même temps risqueraient d\'écraser vos données).</p></div></div>';
+    return;
+  }
   const state = await api.get('/api/auth/state');
   if (!state.authenticated) return authScreen(state.setup_needed);
   layout();
@@ -174,4 +199,6 @@ async function boot() {
   render();
 }
 
-boot().catch((err) => { app.innerHTML = `<div class="auth"><div class="card"><h2>Prospecto ne répond pas</h2><p>${esc(err.message)}</p></div></div>`; });
+boot().catch((err) => {
+  app.innerHTML = `<div class="auth"><div class="card"><h2>Prospecto ne répond pas</h2><p>${esc(err.message)}</p>${isLocal ? '<p class="small muted">Vérifiez que votre navigateur autorise le stockage de données pour ce site (pas de navigation privée).</p>' : ''}</div></div>`;
+});

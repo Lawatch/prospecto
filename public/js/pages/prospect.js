@@ -1,4 +1,4 @@
-import { api, meta } from '../api.js';
+import { api, meta, isLocal } from '../api.js';
 import { badge, confirmDialog, esc, fmtDate, link, modal, on, options, reliability, scoreBadge, toast, toastError, withBusy, formData, EMAIL_STATUS } from '../ui.js';
 
 const ACTION_LABELS = {
@@ -53,7 +53,7 @@ export default async function prospect(el, { params }) {
         <div>
           <div class="card">
             <div class="card-head"><h2>Contacts et décideurs</h2>
-              <div class="actions"><button class="sm" id="enrich" data-busy="Recherche…">Rechercher les contacts (SIRENE + site officiel)</button><button class="sm" id="add-contact">+ Ajouter</button></div></div>
+              <div class="actions"><button class="sm" id="enrich" data-busy="Recherche…">${isLocal ? 'Rechercher les dirigeants (SIRENE)' : 'Rechercher les contacts (SIRENE + site officiel)'}</button><button class="sm" id="paste-site">Coller le texte du site</button><button class="sm" id="add-contact">+ Ajouter</button></div></div>
             <div id="enrich-report"></div>
             ${contacts.length ? `<div class="table-wrap"><table><thead><tr><th>Nom / fonction</th><th>E-mail</th><th>Fiabilité</th><th>Source</th><th></th></tr></thead><tbody>
               ${contacts.map((c) => `<tr>
@@ -145,7 +145,7 @@ export default async function prospect(el, { params }) {
       try {
         const r = await api.post(`/api/establishments/${id}/enrich`, { steps: ['sirene', 'website', 'hunter', 'mx'] });
         await load();
-        el.querySelector('#enrich-report').innerHTML = Object.entries(r.steps).map(([k, s]) => `<div class="alert ${s.ok ? 'info' : 'attention'}"><b>${{ sirene: 'SIRENE / RNE', website: 'Site officiel', hunter: 'Hunter.io', mx: 'Contrôle MX' }[k]}</b> : ${esc(s.message)}</div>`).join('');
+        el.querySelector('#enrich-report').innerHTML = Object.entries(r.steps).filter(([, s]) => !(isLocal && s.manual)).map(([k, s]) => `<div class="alert ${s.ok ? 'info' : 'attention'}"><b>${{ sirene: 'SIRENE / RNE', website: 'Site officiel', hunter: 'Hunter.io', mx: 'Contrôle MX' }[k]}</b> : ${esc(s.message)}</div>`).join('');
       } catch (err) { toastError(err); }
     }));
     openContact = (c) => modal({
@@ -162,6 +162,26 @@ export default async function prospect(el, { params }) {
       }),
     });
     $('#add-contact').addEventListener('click', () => openContact(null));
+    $('#paste-site').addEventListener('click', () => modal({
+      title: 'Coller le texte du site officiel',
+      wide: true,
+      body: `<ol class="small" style="padding-left:18px;margin-top:0">
+          <li>Ouvrez le site${e.website ? ` (${link(e.website)})` : ''} et allez sur la page <b>Contact</b>, <b>Mentions légales</b> ou <b>Recrutement</b>.</li>
+          <li>Sélectionnez tout le texte de la page (Ctrl + A), copiez-le (Ctrl + C) et collez-le ci-dessous (Ctrl + V).</li>
+          <li>Prospecto en extrait les adresses e-mail, les noms cités (directeur de la publication, gérant…) et les signaux (recrutement, rénovation…).</li></ol>
+        <div class="field"><label for="paste-url">Adresse de la page copiée</label><input type="url" id="paste-url" placeholder="https://…/mentions-legales" value="${esc(e.website || '')}"></div>
+        <div class="field"><label for="paste-text">Texte de la page</label><textarea id="paste-text" rows="10" placeholder="Collez ici le texte de la page…"></textarea></div>
+        <div id="paste-result"></div>`,
+      foot: '<button data-close>Fermer</button><button class="primary" id="paste-go">Analyser le texte</button>',
+      onMount: (mEl) => mEl.querySelector('#paste-go').addEventListener('click', async () => {
+        try {
+          const r = await api.post(`/api/establishments/${id}/paste-site`, { text: mEl.querySelector('#paste-text').value, url: mEl.querySelector('#paste-url').value.trim() });
+          mEl.querySelector('#paste-result').innerHTML = `<div class="alert success">${r.emails} adresse(s), ${r.people} personne(s) citée(s), ${r.signals} signal(aux) trouvé(s). Vous pouvez coller une autre page ou fermer.</div>`;
+          mEl.querySelector('#paste-text').value = '';
+          load();
+        } catch (err) { toastError(err); }
+      }),
+    }));
     $('#save-hook').addEventListener('click', async () => {
       await api.patch(`/api/establishments/${id}`, { hook: $('#hook').value.trim(), hook_source: $('#hook-source').value.trim() }).catch(toastError);
       toast('Accroche enregistrée. Les messages déjà préparés peuvent être régénérés depuis l\'écran de validation.', 'success');

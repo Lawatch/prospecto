@@ -354,3 +354,46 @@ test('export sans secrets, sauvegarde, persistance', async () => {
   const ok = await call('POST', '/api/data/purge', { scope: 'non_listed', confirm: 'SUPPRIMER' });
   assert.ok(ok.data.deleted >= 2);
 });
+
+test('envoi par la messagerie web : brouillon pré-rempli puis confirmation', async () => {
+  ageSendLog();
+  await call('PUT', '/api/settings/sending', { provider: 'gmail_web' });
+  const p = await newProspect('Hotel Webmail', 'dir@hotelwebmail.fr');
+  const before = sentMails.length;
+  assert.equal((await call('POST', `/api/messages/${p.msgId}/send`)).status, 409, 'pas d\'envoi direct en mode messagerie web');
+  const r = await call('POST', `/api/messages/${p.msgId}/compose`);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const url = new URL(r.data.url);
+  assert.equal(url.hostname, 'mail.google.com');
+  assert.equal(url.searchParams.get('to'), 'dir@hotelwebmail.fr');
+  assert.match(url.searchParams.get('body'), /Alex Martin/);
+  assert.equal(r.data.message.status, 'envoi_en_cours');
+  const again = await call('POST', `/api/messages/${p.msgId}/compose`);
+  assert.equal(again.data.reopened, true);
+  const q = (await call('GET', '/api/review/queue')).data.ids;
+  assert.ok(q.includes(p.msgId), 'reste visible tant que non confirmé');
+  const c = await call('POST', `/api/messages/${p.msgId}/confirm-sent`);
+  assert.equal(c.data.message.status, 'envoyee');
+  assert.equal(c.data.message.delivery_status, 'inconnu');
+  assert.equal(sentMails.length, before, 'aucun envoi par l\'application elle-même');
+  assert.equal((await call('POST', `/api/messages/${p.msgId}/confirm-sent`)).status, 409);
+  const p2 = await newProspect('Hotel Webmail Deux', 'dir@hotelwebmaildeux.fr');
+  const o2 = await call('POST', `/api/messages/${p2.msgId}/compose`);
+  assert.equal(o2.status, 200, JSON.stringify(o2.data));
+  const cancel = await call('POST', `/api/messages/${p2.msgId}/cancel-compose`);
+  assert.equal(cancel.data.message.status, 'a_valider');
+  assert.equal((await call('POST', '/api/queue/start')).status >= 400, true);
+  await call('PUT', '/api/settings/sending', { provider: 'gmail' });
+});
+
+test('texte copié depuis le site officiel', async () => {
+  const e = await call('POST', '/api/establishments', { name: 'Hotel Copie', website: 'https://hotelcopie.fr', city: 'Annecy' });
+  const r = await call('POST', `/api/establishments/${e.data.id}/paste-site`, { url: 'https://hotelcopie.fr/mentions-legales', text: 'Mentions légales\nDirectrice de la publication : Claire Morel\nContact : contact@hotelcopie.fr — recrutement@hotelcopie.fr\nNous recrutons un chef de réception.' });
+  assert.equal(r.data.emails, 2);
+  const d = (await call('GET', `/api/establishments/${e.data.id}`)).data;
+  assert.ok(d.contacts.some((c) => c.last_name === 'Morel'));
+  const rh = d.contacts.find((c) => c.email === 'recrutement@hotelcopie.fr');
+  assert.equal(rh.role_category, 'rh');
+  assert.equal(rh.email_status, 'publiee');
+  assert.ok(d.establishment.signals.some((s) => s.kind === 'recrutement'));
+});

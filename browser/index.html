@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="prospecto-mode" content="local">
+  <title>Prospecto</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="app"><div class="loading" style="padding:60px;text-align:center;font-family:system-ui">Chargement de Prospecto…</div></div>
+  <div id="toasts" aria-live="polite"></div>
+  <noscript>Prospecto a besoin de JavaScript.</noscript>
+  <script src="vendor/sqljs/sql-wasm.js"></script>
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

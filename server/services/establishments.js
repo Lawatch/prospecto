@@ -31,7 +31,7 @@ export function findDuplicate(c) {
   for (const r of candidates) {
     const sim = r.name_key === key ? 1 : nameSimilarity(c.name, r.name);
     const dist = haversineKm(c.lat, c.lon, r.lat, r.lon);
-    if (sim >= 0.8 && ((dist != null && dist < 0.3) || (!dist && c.postcode && c.postcode === r.postcode))) return r;
+    if ((dist != null && dist < 0.3 && sim >= 0.5) || (sim >= 0.8 && dist == null && c.postcode && c.postcode === r.postcode)) return r;
   }
   return null;
 }

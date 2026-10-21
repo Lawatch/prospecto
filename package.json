@@ -13,11 +13,16 @@
     "launch": "node --disable-warning=ExperimentalWarning launcher/launcher.js",
     "stop": "node launcher/launcher.js --stop",
     "reset-password": "node --disable-warning=ExperimentalWarning launcher/reinitialiser-mot-de-passe.js",
+    "build:web": "node scripts/build-web.mjs",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "express": "^5.1.0",
     "leaflet": "^1.9.4",
     "nodemailer": "^10.1.7"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "sql.js": "1.13"
   }
 }

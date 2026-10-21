@@ -10,7 +10,7 @@ import { getEstablishment, listContacts, setStatus } from '../services/establish
 import { addOpposition } from '../services/contacts.js';
 import { buildVariables, render, VARIABLES, buildSignature } from '../services/templates.js';
 import { createCampaign, generateMessages, hydrateMessage, hydrateTemplate, prepareFollowup, refreshWarnings, regenerateMessage } from '../services/campaigns.js';
-import { sendMessage, SendBlocked, sendingStats, startQueue, stopQueue, queueTick } from '../services/mailer.js';
+import { sendMessage, SendBlocked, sendingStats, startQueue, stopQueue, queueTick, openCompose, confirmComposeSent, cancelCompose, composeUrl, isComposeProvider, COMPOSE_PROVIDERS } from '../services/mailer.js';
 import { dueFollowups } from '../services/followups.js';
 import { OUTCOMES, MESSAGE_STATUSES } from '../services/catalog.js';
 
@@ -185,8 +185,9 @@ export function messagingRoutes(app) {
   // Prochain message à valider (mode validation en série).
   app.get('/api/review/queue', (req, res) => {
     const p = {};
-    let where = "m.status IN ('a_valider')";
-    if (req.query.include_drafts === '1') where = "m.status IN ('a_valider','brouillon')";
+    const pendingCompose = "(m.status = 'envoi_en_cours' AND m.provider IN ('gmail_web','outlook_web','outlook_pro_web','mailto'))";
+    let where = `(m.status IN ('a_valider') OR ${pendingCompose})`;
+    if (req.query.include_drafts === '1') where = `(m.status IN ('a_valider','brouillon') OR ${pendingCompose})`;
     if (req.query.campaign_id) { where += ' AND m.campaign_id = $cid'; p.$cid = Number(req.query.campaign_id); }
     const ids = all(`SELECT m.id FROM messages m JOIN establishments e ON e.id = m.establishment_id WHERE ${where} ORDER BY e.score DESC NULLS LAST, m.id`, p).map((r) => r.id);
     res.json({ ids });
@@ -234,6 +235,34 @@ export function messagingRoutes(app) {
       throw err;
     }
   });
+
+  // Envoi par la messagerie web : ouverture du brouillon pré-rempli, puis confirmation par l'utilisateur.
+  app.post('/api/messages/:id/compose', (req, res) => {
+    const id = Number(req.params.id);
+    const m = hydrateMessage(get('SELECT * FROM messages WHERE id = ?', id));
+    try {
+      if (m?.status === 'envoi_en_cours' && isComposeProvider(m.provider)) {
+        return res.json({ url: composeUrl(m.provider, m, { authuser: getSetting('profile').email || undefined }), message: m, reopened: true });
+      }
+      res.json(openCompose(id));
+    } catch (err) {
+      if (err instanceof SendBlocked) return res.status(409).json({ error: err.message, ...err.details });
+      throw err;
+    }
+  });
+  app.post('/api/messages/:id/confirm-sent', (req, res) => {
+    try { res.json({ ok: true, message: confirmComposeSent(Number(req.params.id)) }); } catch (err) {
+      if (err instanceof SendBlocked) return res.status(409).json({ error: err.message });
+      throw err;
+    }
+  });
+  app.post('/api/messages/:id/cancel-compose', (req, res) => {
+    try { res.json({ ok: true, message: cancelCompose(Number(req.params.id)) }); } catch (err) {
+      if (err instanceof SendBlocked) return res.status(409).json({ error: err.message });
+      throw err;
+    }
+  });
+  app.get('/api/compose-providers', (req, res) => res.json(COMPOSE_PROVIDERS));
 
   app.post('/api/messages/:id/validate', (req, res) => {
     const id = Number(req.params.id);
@@ -320,7 +349,10 @@ export function messagingRoutes(app) {
   app.post('/api/queue/start', (req, res) => {
     const stats = sendingStats();
     if (!stats.queued) return res.status(400).json({ error: 'Aucun message validé dans la file' });
-    startQueue();
+    try { startQueue(); } catch (err) {
+      if (err instanceof SendBlocked) return res.status(409).json({ error: err.message });
+      throw err;
+    }
     queueTick().catch(() => {});
     res.json(sendingStats());
   });

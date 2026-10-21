@@ -1,15 +1,16 @@
-import { api, meta } from '../api.js';
+import { api, meta, isLocal, backend, saveBlob } from '../api.js';
 import { confirmDialog, esc, fmtDate, on, toast, toastError, withBusy } from '../ui.js';
 
-const TABS = { profil: 'Profil', pieces: 'CV et pièces jointes', messagerie: 'Messagerie', envoi: 'Envoi et relances', sources: 'Sources de données', scoring: 'Scoring', opposition: "Liste d'opposition", donnees: 'Données', securite: 'Sécurité' };
+const TABS = { profil: 'Profil', pieces: 'CV et pièces jointes', messagerie: 'Messagerie', envoi: 'Envoi et relances', sources: 'Sources de données', scoring: 'Scoring', opposition: "Liste d'opposition", donnees: 'Données et sauvegarde', securite: 'Confidentialité' };
 
 export default async function settings(el, { query, refreshCounts }) {
   const m = await meta();
   let tab = TABS[query.tab] ? query.tab : 'profil';
   let data;
 
+  let composeProviders = {};
   async function load() {
-    data = await api.get('/api/settings');
+    [data, composeProviders] = await Promise.all([api.get('/api/settings'), api.get('/api/compose-providers')]);
     draw();
   }
 
@@ -76,7 +77,25 @@ export default async function settings(el, { query, refreshCounts }) {
     on(t, 'click', '[data-del]', async (e, b) => { if (await confirmDialog('Supprimer', 'Supprimer cette pièce jointe ?', { danger: true, okLabel: 'Supprimer' })) { try { await api.del(`/api/attachments/${b.dataset.del}`); draw(); } catch (err) { toastError(err); } } });
   }
 
+  function modeChooser() {
+    const s = data.settings.sending;
+    const direct = isLocal ? { gmail: 'Gmail — envoi direct depuis Prospecto (avancé)' } : { gmail: 'Gmail API (connexion OAuth)', outlook: 'Outlook API (connexion OAuth)', smtp: 'Serveur SMTP' };
+    const opt = (k, label, help) => `<label class="inline" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px"><input type="radio" name="provider" value="${k}" ${s.provider === k ? 'checked' : ''} style="margin-top:3px"><span><b>${esc(label)}</b>${help ? `<br><span class="small muted">${help}</span>` : ''}</span></label>`;
+    return `<div class="card"><h2>Comment envoyer vos candidatures ?</h2>
+      <p class="small muted">Recommandé : votre messagerie dans le navigateur. Rien à configurer : l'e-mail s'ouvre pré-rempli dans un nouvel onglet, vous cliquez sur « Envoyer », puis vous confirmez dans Prospecto. Les envois apparaissent normalement dans vos « Envoyés ».</p>
+      <form id="mode">
+        ${opt('gmail_web', composeProviders.gmail_web, 'Vous devez être connecté à Gmail dans ce navigateur.')}
+        ${opt('outlook_pro_web', composeProviders.outlook_pro_web, 'Pour une adresse professionnelle Microsoft 365 (outlook.office.com).')}
+        ${opt('outlook_web', composeProviders.outlook_web, 'Pour une adresse @outlook.fr, @hotmail.fr, @live.fr.')}
+        ${opt('mailto', composeProviders.mailto, 'Ouvre le logiciel installé (par exemple Outlook) s\'il est configuré.')}
+        <div class="hr"></div>
+        ${Object.entries(direct).map(([k, v]) => opt(k, v, k === 'gmail' && isLocal ? 'Envoi sans quitter Prospecto, pièces jointes incluses. Demande de créer un identifiant Google (10 minutes, voir plus bas).' : '')).join('')}
+      </form>
+      <div class="small muted">Adresse d'expédition prise en compte pour Gmail : celle de votre profil (${esc(data.settings.profile.email || 'non renseignée')}).</div></div>`;
+  }
+
   function messagerie(t) {
+    if (isLocal) return messagerieLocal(t);
     const c = data.connections;
     const s = data.settings.sending;
     const provider = (key, title, guide) => {
@@ -93,7 +112,7 @@ export default async function settings(el, { query, refreshCounts }) {
         <div class="actions" style="margin-top:12px">${conn.connected ? `<button data-disconnect="${key}">Déconnecter</button>` : ''}<button class="primary" data-connect="${key}" ${client ? '' : 'disabled'}>${conn.connected ? 'Reconnecter' : 'Connecter'} ${title.split(' ')[0]}</button>
           ${s.provider === key ? '<span class="badge primary">Messagerie d\'envoi active</span>' : conn.connected ? `<button class="sm" data-use="${key}">Utiliser pour l'envoi</button>` : ''}</div></div>`;
     };
-    t.innerHTML = `
+    t.innerHTML = `${modeChooser()}
       <div class="alert info">Aucun mot de passe de messagerie n'est demandé pour Gmail et Outlook : la connexion passe par l'autorisation officielle (OAuth). Les jetons sont stockés chiffrés sur cet ordinateur.</div>
       ${provider('gmail', 'Gmail / Google Workspace', 'Dans <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a> : créez un projet, activez « Gmail API », configurez l\'écran de consentement (type Externe, ajoutez votre adresse comme utilisateur test), puis créez un identifiant OAuth de type « Application de bureau ». Voir le guide pas à pas dans docs/CONNEXION-MESSAGERIE.md.')}
       <div class="card"><label class="inline"><input type="checkbox" id="detect" ${s.gmail_detect_replies ? 'checked' : ''}> Détecter les réponses et les rejets (Gmail : lecture des seules métadonnées — expéditeur et date — des fils de vos candidatures)</label><div class="small muted">Nécessite de reconnecter Gmail après activation.</div></div>
@@ -104,6 +123,7 @@ export default async function settings(el, { query, refreshCounts }) {
           <div class="full actions"><button class="sm">Enregistrer</button><button type="button" class="sm" id="smtp-test">Tester la connexion</button>${s.provider === 'smtp' ? '<span class="badge primary">Messagerie d\'envoi active</span>' : c.smtp.connected ? '<button type="button" class="sm" data-use="smtp">Utiliser pour l\'envoi</button>' : ''}</div></form></div>
       <div class="card"><h2>Tester l'envoi</h2><p class="small muted">Envoie un e-mail de test à votre propre adresse avec la messagerie active (${esc(s.provider)}).</p>
         <div class="row"><input type="email" id="test-to" placeholder="${esc(data.sending.account || 'votre adresse')}" style="max-width:320px"><button id="test" data-busy="Envoi…">Envoyer un test</button></div></div>`;
+    bindMode(t);
     on(t, 'submit', '[data-client]', async (e, f) => {
       e.preventDefault();
       try { await api.put(`/api/secrets/oauth_client_${f.dataset.client}`, { value: { client_id: f.client_id.value.trim(), client_secret: f.client_secret.value.trim() } }); toast('Identifiants enregistrés (chiffrés)', 'success'); load(); } catch (err) { toastError(err); }
@@ -126,6 +146,75 @@ export default async function settings(el, { query, refreshCounts }) {
       try { await api.put('/api/secrets/smtp', { value: { host: f.host.value.trim(), port: Number(f.port.value), user: f.user.value.trim(), password: f.password.value, from: f.from.value.trim() } }); toast('SMTP enregistré', 'success'); load(); } catch (err) { toastError(err); }
     });
     t.querySelector('#smtp-test').addEventListener('click', async () => { try { await api.post('/api/mail/smtp-test'); toast('Connexion SMTP réussie', 'success'); } catch (err) { toastError(err); } });
+    t.querySelector('#test').addEventListener('click', (e) => withBusy(e.currentTarget, async () => {
+      try { const r = await api.post('/api/mail/test', { to: t.querySelector('#test-to').value || undefined }); toast(`E-mail de test envoyé à ${r.to}`, 'success'); } catch (err) { toastError(err); }
+    }));
+  }
+
+  function bindMode(t) {
+    t.querySelector('#mode').addEventListener('change', async (e) => {
+      if (e.target.name !== 'provider') return;
+      await api.put('/api/settings/sending', { provider: e.target.value });
+      toast('Mode d\'envoi enregistré', 'success');
+      refreshCounts();
+      load();
+    });
+  }
+
+  // Version en ligne : Gmail direct via Google Identity Services (jeton d'une heure, rien de durable stocké).
+  function loadGis() {
+    if (window.google?.accounts?.oauth2) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const sc = document.createElement('script');
+      sc.src = 'https://accounts.google.com/gsi/client';
+      sc.onload = resolve;
+      sc.onerror = () => reject(new Error('Impossible de charger le service de connexion Google (bloqué par le réseau ?).'));
+      document.head.appendChild(sc);
+    });
+  }
+
+  function messagerieLocal(t) {
+    const g = data.connections.gmail;
+    const client = data.clients.gmail;
+    const s = data.settings.sending;
+    t.innerHTML = `${modeChooser()}
+      <div class="card"><div class="card-head"><h2>Gmail — envoi direct (facultatif)</h2>${g.connected && !g.expired ? `<span class="badge success">Connecté : ${esc(g.email)}</span>` : g.connected ? '<span class="badge warning">Session expirée</span>' : '<span class="badge">Non connecté</span>'}</div>
+        <p class="small muted">Inutile si vous utilisez la messagerie dans le navigateur. Pour envoyer directement (avec pièces jointes et détection des réponses), créez un identifiant OAuth de type <b>Application Web</b> dans <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console</a> (Gmail API activée, votre adresse en utilisateur test) et déclarez l'origine JavaScript autorisée : <code>${esc(location.origin)}</code>. La connexion dure une heure, puis il suffit de cliquer sur « Reconnecter ».</p>
+        <form class="row" id="gclient"><input type="text" name="client_id" placeholder="Identifiant client (…apps.googleusercontent.com)" value="${esc(client?.client_id || '')}" style="max-width:480px"><button class="sm">Enregistrer</button></form>
+        <div class="actions" style="margin-top:12px"><button class="primary" id="gconnect" ${client ? '' : 'disabled'}>${g.connected ? 'Reconnecter Gmail' : 'Connecter Gmail'}</button>${g.connected ? '<button id="gdisconnect">Déconnecter</button>' : ''}</div>
+        <div class="field" style="margin-top:12px"><label class="inline"><input type="checkbox" id="detect" ${s.gmail_detect_replies ? 'checked' : ''}> Détecter aussi les réponses et rejets (lecture des seules métadonnées des fils de vos candidatures)</label></div></div>
+      <div class="card"><h2>Tester l'envoi direct</h2><div class="row"><input type="email" id="test-to" placeholder="${esc(g.email || 'votre adresse')}" style="max-width:320px"><button id="test" data-busy="Envoi…" ${g.connected ? '' : 'disabled'}>Envoyer un test</button></div></div>`;
+    bindMode(t);
+    if (client) loadGis().catch(() => {});
+    t.querySelector('#gclient').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await api.put('/api/secrets/oauth_client_gmail', { value: { client_id: e.target.client_id.value.trim() } });
+      toast('Identifiant enregistré', 'success');
+      load();
+    });
+    t.querySelector('#gconnect').addEventListener('click', async () => {
+      try {
+        await loadGis();
+        const scope = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.send', ...(s.gmail_detect_replies ? ['https://www.googleapis.com/auth/gmail.metadata'] : [])].join(' ');
+        const tc = window.google.accounts.oauth2.initTokenClient({
+          client_id: client.client_id,
+          scope,
+          callback: async (resp) => {
+            if (resp.error) return toastError(new Error(`Connexion refusée : ${resp.error}`));
+            try {
+              const info = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${resp.access_token}` } }).then((r) => r.json());
+              await api.post('/api/oauth/gmail/token', { access_token: resp.access_token, expires_in: resp.expires_in, scope: resp.scope, email: info.email, name: info.name });
+              toast(`Gmail connecté : ${info.email}`, 'success');
+              refreshCounts();
+              load();
+            } catch (err) { toastError(err); }
+          },
+        });
+        tc.requestAccessToken();
+      } catch (err) { toastError(err); }
+    });
+    t.querySelector('#gdisconnect')?.addEventListener('click', async () => { await api.post('/api/oauth/gmail/disconnect'); load(); refreshCounts(); });
+    t.querySelector('#detect').addEventListener('change', async (e) => { await api.put('/api/settings/sending', { gmail_detect_replies: e.target.checked }); toast(e.target.checked ? 'Activé : reconnectez Gmail.' : 'Désactivé'); load(); });
     t.querySelector('#test').addEventListener('click', (e) => withBusy(e.currentTarget, async () => {
       try { const r = await api.post('/api/mail/test', { to: t.querySelector('#test-to').value || undefined }); toast(`E-mail de test envoyé à ${r.to}`, 'success'); } catch (err) { toastError(err); }
     }));
@@ -161,11 +250,11 @@ export default async function settings(el, { query, refreshCounts }) {
         <div class="small"><p><b>OpenStreetMap / Overpass</b> — établissements, adresses, sites, téléphones, enseignes. Licence ODbL (attribution affichée).</p>
         <p><b>Recherche d'entreprises (INSEE SIRENE / INPI RNE)</b> — entité légale, dirigeants déclarés, effectifs, nombre d'établissements.</p>
         <p><b>Base Adresse Nationale / Nominatim</b> — géocodage de la ville de départ.</p>
-        <p><b>Sites officiels</b> — 6 pages publiques au plus par site (accueil, contact, mentions légales, recrutement), robots.txt respecté, 1 requête/seconde.</p></div>
+        ${isLocal ? '<p><b>Sites officiels</b> — un navigateur ne peut pas lire lui-même les sites des établissements : depuis une fiche, ouvrez la page Contact ou Mentions légales, copiez son texte et collez-le dans « Coller le texte du site ». Prospecto en extrait adresses, noms et signaux.</p>' : '<p><b>Sites officiels</b> — 6 pages publiques au plus par site (accueil, contact, mentions légales, recrutement), robots.txt respecté, 1 requête/seconde.</p>'}</div>
         <form id="srch" class="form-grid">
           ${field('contact_email', 'Votre e-mail pour les services OpenStreetMap', s.contact_email, { type: 'email', help: 'Recommandé par la politique d\'usage de Nominatim.' })}
           ${field('default_radius_km', 'Rayon de recherche par défaut (km)', s.default_radius_km, { type: 'number' })}
-          <div class="full"><label class="inline"><input type="checkbox" name="respect_robots" ${s.respect_robots !== false ? 'checked' : ''}> Respecter robots.txt des sites analysés (fortement recommandé)</label></div>
+          ${isLocal ? '' : `<div class="full"><label class="inline"><input type="checkbox" name="respect_robots" ${s.respect_robots !== false ? 'checked' : ''}> Respecter robots.txt des sites analysés (fortement recommandé)</label></div>`}
           <div class="full"><button class="primary sm">Enregistrer</button></div></form></div>
       ${key('google_places_key', 'Google Places API (facultatif, payant au-delà du quota gratuit)', 'Améliore la couverture et les sites web/téléphones. Clé à créer dans Google Cloud (API « Places API (New) »), avec facturation activée. Fixez un plafond de budget dans la console Google.')}
       ${key('hunter_key', 'Hunter.io (facultatif)', 'Recherche d\'adresses professionnelles publiques par domaine et vérification. Offre gratuite limitée (quelques dizaines de requêtes par mois).')}`;
@@ -212,14 +301,38 @@ export default async function settings(el, { query, refreshCounts }) {
 
   async function donnees(t) {
     const backups = await api.get('/api/backups');
+    const info = isLocal ? await api.get('/api/local/info') : null;
     t.innerHTML = `<div class="grid cols-2">
       <div class="card"><h2>Export</h2><p class="small muted">Toutes vos données (hors clés, jetons et mots de passe).</p><div class="actions"><a class="btn" href="/api/export.json">Exporter tout (JSON)</a><a class="btn" href="/api/establishments/export.csv?in_list=">Établissements (CSV)</a></div></div>
-      <div class="card"><h2>Sauvegardes</h2><p class="small muted">Une sauvegarde automatique par jour (14 conservées), dans le dossier <code>data/sauvegardes</code>.</p><button id="bk">Sauvegarder maintenant</button>
-        <div class="small" style="margin-top:8px">${backups.slice(0, 5).map((b) => `<div>${esc(b.file)} · ${Math.round(b.size / 1024)} Ko</div>`).join('')}</div></div>
+      ${isLocal ? `<div class="card"><h2>Sauvegarde sur votre ordinateur</h2>
+        <p class="small">Vos données sont enregistrées dans ce navigateur. Si l'historique du navigateur est effacé, elles disparaissent : <b>téléchargez régulièrement une sauvegarde</b> (un seul fichier) et rangez-la dans vos documents ou votre cloud.</p>
+        <div class="small muted">Dernière sauvegarde téléchargée : ${info.last_download ? fmtDate(info.last_download, true) : 'jamais'} · Stockage ${info.persisted ? 'protégé contre le nettoyage automatique' : 'non protégé par le navigateur'}${info.usage != null ? ` · ${Math.round(info.usage / 1024)} Ko utilisés` : ''}</div>
+        <div class="actions" style="margin-top:10px"><button class="primary" id="dl-db">Télécharger une sauvegarde</button><label class="btn" for="restore-file" style="margin:0">Restaurer une sauvegarde…</label><input type="file" id="restore-file" accept=".sqlite,application/octet-stream" hidden></div></div>` : ''}
+      <div class="card"><h2>${isLocal ? 'Copies automatiques dans le navigateur' : 'Sauvegardes'}</h2><p class="small muted">${isLocal ? 'Une copie par jour (7 conservées) est gardée dans ce navigateur, utile en cas de fausse manipulation.' : 'Une sauvegarde automatique par jour (14 conservées), dans le dossier <code>data/sauvegardes</code>.'}</p><button id="bk">Sauvegarder maintenant</button>
+        <div class="small" style="margin-top:8px">${backups.slice(0, 5).map((b) => `<div>${esc(b.file)}${b.size ? ` · ${Math.round(b.size / 1024)} Ko` : ''}</div>`).join('')}</div></div>
       <div class="card"><h2>Suppression</h2><p class="small muted">Une sauvegarde est faite avant toute suppression. La liste d'opposition est toujours conservée.</p>
         <div class="field"><label>Portée</label><select id="scope"><option value="non_listed">Résultats de recherche non retenus (hors liste, jamais contactés)</option><option value="older_than">Données plus anciennes que N jours</option><option value="all">Toutes les données de prospection</option></select></div>
         <div class="field"><input type="number" id="days" value="365" min="1" style="max-width:120px"> jours (pour « plus anciennes que »)</div>
         <div class="row"><input type="text" id="confirm" placeholder="Tapez SUPPRIMER" style="max-width:200px"><button class="danger" id="purge">Supprimer</button></div></div></div>`;
+    t.querySelector('#dl-db')?.addEventListener('click', async () => {
+      try {
+        const b = await backend();
+        const bytes = await b.exportDatabaseFile();
+        saveBlob(new Blob([bytes], { type: 'application/octet-stream' }), `prospecto-sauvegarde-${new Date().toISOString().slice(0, 10)}.sqlite`);
+        toast('Sauvegarde téléchargée', 'success');
+      } catch (err) { toastError(err); }
+    });
+    t.querySelector('#restore-file')?.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (!(await confirmDialog('Restaurer la sauvegarde', `Remplacer toutes les données actuelles par le contenu de « ${esc(file.name)} » ?`, { danger: true, okLabel: 'Restaurer' }))) return;
+      try {
+        const b = await backend();
+        await b.importDatabaseFile(new Uint8Array(await file.arrayBuffer()));
+        toast('Sauvegarde restaurée : rechargement…', 'success');
+        setTimeout(() => location.reload(), 600);
+      } catch (err) { toastError(err); }
+    });
     t.querySelector('#bk').addEventListener('click', async () => { await api.post('/api/backup'); toast('Sauvegarde effectuée', 'success'); draw(); });
     t.querySelector('#purge').addEventListener('click', async () => {
       try { const r = await api.post('/api/data/purge', { scope: t.querySelector('#scope').value, days: Number(t.querySelector('#days').value), confirm: t.querySelector('#confirm').value }); toast(`Suppression effectuée${r.deleted != null ? ` (${r.deleted} établissement(s))` : ''}`, 'success'); refreshCounts(); } catch (err) { toastError(err); }
@@ -227,6 +340,14 @@ export default async function settings(el, { query, refreshCounts }) {
   }
 
   function securite(t) {
+    if (isLocal) {
+      t.innerHTML = `<div class="card"><h2>Où sont vos données ?</h2><div class="small">
+        <p>• Prospecto fonctionne entièrement dans votre navigateur : aucune installation, aucun serveur. Vos prospects, messages et réglages restent dans ce navigateur, sur cet ordinateur.</p>
+        <p>• Les seuls échanges sortants sont ceux que vous déclenchez : recherche (OpenStreetMap, annuaire des entreprises de l'État, géocodage IGN), contrôle des domaines e-mail (DNS Google), et votre messagerie.</p>
+        <p>• Quiconque utilise votre session Windows et ce navigateur peut ouvrir Prospecto : verrouillez votre poste en votre absence.</p>
+        <p>• Pensez à télécharger régulièrement une sauvegarde (onglet Données).</p></div></div>`;
+      return;
+    }
     t.innerHTML = `<form class="card" id="f" style="max-width:520px"><h2>Mot de passe de l'application</h2>
       ${field('current', 'Mot de passe actuel', '', { type: 'password' })}${field('password', 'Nouveau mot de passe (8 caractères minimum)', '', { type: 'password' })}
       <button class="primary">Changer</button></form>

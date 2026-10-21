@@ -1,6 +1,19 @@
 # Architecture, intégrations, coûts et limites
 
-## 1. Choix d'architecture
+## 0. Deux façons d'utiliser Prospecto
+
+| | Version en ligne (recommandée sur un poste de travail) | Version installée |
+|---|---|---|
+| Accès | https://lawatch.github.io/prospecto/ | Raccourci bureau, `http://127.0.0.1:3737` |
+| Installation | Aucune | Node.js + installateur |
+| Données | Base SQLite (WebAssembly) dans le navigateur (IndexedDB), sauvegarde téléchargeable | Fichier `data/prospecto.sqlite` |
+| Recherche | OpenStreetMap, SIRENE, géocodage IGN, Google Places (option) appelés depuis le navigateur | Idem, depuis le serveur local |
+| Sites des établissements | Texte copié-collé (les navigateurs interdisent la lecture directe) | Lecture automatique (robots.txt respecté) |
+| Envoi | Brouillon pré-rempli dans Gmail/Outlook web, ou Gmail API (jeton d'une heure) | Gmail API, Outlook (Graph), SMTP, ou messagerie web |
+
+Le code est le même : `scripts/build-web.mjs` compile les routes et services de `server/` pour le navigateur, en remplaçant les modules propres à Node par les adaptateurs de `browser/` (SQLite via sql.js, fichiers stockés dans la base, DNS via DNS-over-HTTPS, MIME pour Gmail). La publication sur GitHub Pages est automatique (`.github/workflows/pages.yml`) après les tests.
+
+## 1. Choix d'architecture (version installée)
 
 **Application web locale**, installée sur votre ordinateur et ouverte dans votre navigateur.
 

@@ -1,11 +1,44 @@
 import { get, logEvent, now, update } from '../db.js';
 import { getSetting } from '../settings.js';
+import { CAN_FETCH_SITES } from '../config.js';
 import { domainOf } from '../util.js';
 import { getEstablishment, addSignals, listContacts, recomputeScore, setStatus } from './establishments.js';
 import { matchCompany, mapSireneResult, dirigeantsToContacts } from './sirene.js';
-import { analyzeWebsite } from './website.js';
+import { analyzeWebsite, analyzeText } from './website.js';
 import { hasHunterKey, hunterDomainSearch } from './hunter.js';
 import { checkMx, refreshReliability, upsertContact } from './contacts.js';
+
+// Enregistre ce qui a été trouvé sur le site officiel (lecture automatique ou texte copié par l'utilisateur).
+export function ingestWebsiteResult(est, res, sourceLabel) {
+  let added = 0;
+  for (const e of res.emails) {
+    upsertContact(est, {
+      email: e.email,
+      role: e.kind === 'rh' ? 'Service recrutement / RH' : e.kind === 'direction' ? 'Direction' : e.kind === 'generique' ? 'Adresse générique' : null,
+      role_category: e.kind === 'rh' ? 'rh' : e.kind === 'direction' ? 'direction_etablissement' : e.kind === 'generique' ? 'generique' : undefined,
+      email_status: e.same_domain ? 'publiee' : 'non_verifiee',
+      source: sourceLabel,
+      source_url: e.source_url,
+      collected_at: res.collected_at,
+    });
+    added++;
+  }
+  for (const p of res.people) {
+    upsertContact(est, { first_name: p.first_name, last_name: p.last_name, role: p.role, role_category: p.role_category, source: sourceLabel, source_url: p.source_url, notes: `Extrait : « ${p.snippet} »` });
+  }
+  const fields = {};
+  if (res.contact_form_url && !est.contact_form_url) fields.contact_form_url = res.contact_form_url;
+  const generic = res.emails.find((e) => e.kind === 'generique' && e.same_domain);
+  if (generic && !est.generic_email) fields.generic_email = generic.email;
+  const siret = res.sirets.find((s) => s.length === 14);
+  if (siret && !est.siret) fields.siret = siret;
+  const sources = est.sources;
+  if (!sources.some((s) => s.source === sourceLabel)) sources.push({ source: sourceLabel, ref: est.domain || null, url: res.pages[0]?.url || est.website, collected_at: res.collected_at });
+  fields.sources = sources;
+  update('establishments', est.id, fields);
+  if (res.signals.length) addSignals(est.id, res.signals.map((s) => ({ ...s, collected_at: res.collected_at })));
+  return added;
+}
 
 // Enrichissement d'un établissement à partir de sources publiques et traçables.
 // Chaque étape est indépendante : une source en échec n'empêche pas les autres.
@@ -43,38 +76,13 @@ export async function enrichEstablishment(id, { steps = ['sirene', 'website', 'm
   if (steps.includes('website')) {
     if (!est.website) {
       report.steps.website = { ok: true, message: 'Pas de site officiel connu : ajoutez-le sur la fiche pour lancer l\'analyse' };
+    } else if (!CAN_FETCH_SITES) {
+      report.steps.website = { ok: true, manual: true, message: 'Le navigateur ne peut pas lire les sites d\'établissements directement : ouvrez leur page Contact ou Mentions légales et utilisez « Coller le texte du site ».' };
     } else {
       try {
         const res = await analyzeWebsite(est.website, { respectRobots: getSetting('search').respect_robots !== false });
         if (res.error && !res.emails.length) throw new Error(`Site inaccessible (${res.error})`);
-        for (const e of res.emails) {
-          upsertContact(est, {
-            email: e.email,
-            role: e.kind === 'rh' ? 'Service recrutement / RH' : e.kind === 'direction' ? 'Direction' : e.kind === 'generique' ? 'Adresse générique' : null,
-            role_category: e.kind === 'rh' ? 'rh' : e.kind === 'direction' ? 'direction_etablissement' : e.kind === 'generique' ? 'generique' : undefined,
-            email_status: e.same_domain ? 'publiee' : 'non_verifiee',
-            source: 'Site officiel',
-            source_url: e.source_url,
-            collected_at: res.collected_at,
-          });
-          report.added_contacts++;
-        }
-        for (const p of res.people) {
-          upsertContact(est, { first_name: p.first_name, last_name: p.last_name, role: p.role, role_category: p.role_category, source: 'Site officiel', source_url: p.source_url, notes: `Extrait : « ${p.snippet} »` });
-        }
-        const fields = {};
-        if (res.contact_form_url && !est.contact_form_url) fields.contact_form_url = res.contact_form_url;
-        const generic = res.emails.find((e) => e.kind === 'generique' && e.same_domain);
-        if (generic && !est.generic_email) fields.generic_email = generic.email;
-        if (res.sirets.length && !est.siret) {
-          const siret = res.sirets.find((s) => s.length === 14);
-          if (siret) fields.siret = siret;
-        }
-        const sources = est.sources;
-        if (!sources.some((s) => s.source === 'Site officiel')) sources.push({ source: 'Site officiel', ref: domainOf(est.website), url: est.website, collected_at: res.collected_at });
-        fields.sources = sources;
-        update('establishments', id, fields);
-        if (res.signals.length) addSignals(id, res.signals.map((s) => ({ ...s, collected_at: res.collected_at })));
+        report.added_contacts += ingestWebsiteResult(est, res, 'Site officiel');
         const visited = res.pages.filter((p) => p.ok).length;
         const blocked = res.pages.filter((p) => p.note === 'robots.txt').length;
         report.steps.website = { ok: true, message: `${visited} page(s) analysée(s)${blocked ? `, ${blocked} exclue(s) par robots.txt` : ''} : ${res.emails.length} adresse(s), ${res.people.length} personne(s) citée(s), ${res.signals.length} signal(aux)` };
@@ -115,4 +123,19 @@ export async function enrichEstablishment(id, { steps = ['sirene', 'website', 'm
   recomputeScore(id);
   logEvent('establishment', id, 'enrichi', report);
   return report;
+}
+
+// Texte copié depuis une page du site officiel : mêmes extractions que la lecture automatique.
+export function enrichFromPastedText(id, { text, url }) {
+  const est = getEstablishment(id);
+  if (!est) throw Object.assign(new Error('Établissement introuvable'), { status: 404 });
+  if (!String(text || '').trim()) throw Object.assign(new Error('Collez le texte de la page.'), { status: 400 });
+  const res = analyzeText(text, { url: url || est.website, website: est.website });
+  const added = ingestWebsiteResult(est, res, 'Site officiel (texte copié)');
+  refreshReliability(getEstablishment(id));
+  update('establishments', id, { enriched_at: now(), updated_at: now() });
+  if (est.status === 'identifie' && res.emails.length) setStatus(id, 'contact_a_verifier');
+  recomputeScore(id);
+  logEvent('establishment', id, 'enrichi', { source: 'texte copié', emails: res.emails.length, people: res.people.length, signals: res.signals.length });
+  return { emails: res.emails.length, people: res.people.length, signals: res.signals.length, added };
 }

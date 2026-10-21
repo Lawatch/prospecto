@@ -1,5 +1,5 @@
 import { EMAIL_RE, classifyEmail, domainOf, isValidEmail, sleep, stripAccents } from '../util.js';
-import { USER_AGENT } from '../config.js';
+import { UA_HEADERS } from '../config.js';
 import { roleCategory } from './catalog.js';
 
 // Analyse du site officiel d'un établissement : quelques pages publiques seulement (accueil, contact,
@@ -43,7 +43,7 @@ async function robotsFor(origin) {
   if (robotsCache.has(origin)) return robotsCache.get(origin);
   let rules = [];
   try {
-    const res = await fetch(origin + '/robots.txt', { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(8000) });
+    const res = await fetch(origin + '/robots.txt', { headers: { ...UA_HEADERS }, signal: AbortSignal.timeout(8000) });
     if (res.ok) rules = parseRobots(await res.text());
   } catch { /* robots.txt absent : pas de restriction déclarée */ }
   robotsCache.set(origin, rules);
@@ -56,12 +56,12 @@ async function fetchPage(url, respectRobots) {
     const rules = await robotsFor(u.origin);
     if (!isAllowedByRobots(rules, u.pathname)) return { url, skipped: 'robots.txt' };
   }
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'text/html', 'Accept-Language': 'fr' }, redirect: 'follow', signal: AbortSignal.timeout(15000) });
+  const res = await fetch(url, { headers: { ...UA_HEADERS, Accept: 'text/html', 'Accept-Language': 'fr' }, redirect: 'follow', signal: AbortSignal.timeout(15000) });
   if (!res.ok) return { url, error: `HTTP ${res.status}` };
   const type = res.headers.get('content-type') || '';
   if (!type.includes('html')) return { url, error: 'contenu non HTML' };
-  const buf = Buffer.from(await res.arrayBuffer());
-  return { url: res.url || url, html: buf.subarray(0, MAX_BYTES).toString('utf8') };
+  const buf = new Uint8Array(await res.arrayBuffer());
+  return { url: res.url || url, html: new TextDecoder('utf-8').decode(buf.subarray(0, MAX_BYTES)) };
 }
 
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', eacute: 'é', egrave: 'è', ecirc: 'ê', agrave: 'à', ccedil: 'ç', ocirc: 'ô', ucirc: 'û', icirc: 'î', laquo: '«', raquo: '»', rsquo: '’' };
@@ -156,6 +156,25 @@ export function extractSirets(text) {
 
 export function hasContactForm(html) {
   return /<form\b[\s\S]*?(<textarea|type=["']email)/i.test(html);
+}
+
+// Analyse d'un texte copié depuis le site officiel (version navigateur, ou site illisible automatiquement).
+export function analyzeText(rawText, { url = null, website = null } = {}) {
+  const isHtml = /<[a-z][\s\S]*>/i.test(rawText);
+  const html = isHtml ? rawText : '';
+  const text = isHtml ? htmlToText(rawText) : String(rawText);
+  const domain = domainOf(website || url);
+  const sameDomain = (email) => { const d = domainOf(email); return !!domain && !!d && (d === domain || d.endsWith('.' + domain)); };
+  return {
+    emails: extractEmails(html, text).map((email) => ({ email, kind: classifyEmail(email), source_url: url, same_domain: sameDomain(email) })).filter((e) => e.kind !== 'technique'),
+    people: extractPeople(text).map((p) => ({ ...p, source_url: url })),
+    signals: extractSignals(text, url),
+    sirets: extractSirets(text),
+    contact_form_url: null,
+    pages: [{ url, ok: true, note: 'texte copié' }],
+    collected_at: new Date().toISOString(),
+    domain,
+  };
 }
 
 export async function analyzeWebsite(website, { respectRobots = true } = {}) {

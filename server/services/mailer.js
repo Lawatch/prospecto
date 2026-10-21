@@ -14,9 +14,31 @@ import { setStatus } from './establishments.js';
 
 const SENDABLE = ['a_valider', 'brouillon', 'validee', 'erreur'];
 
+// Envoi « par la messagerie web » : l'application ouvre un brouillon pré-rempli dans Gmail ou Outlook,
+// l'utilisateur clique lui-même sur Envoyer, puis confirme. Aucune configuration ni autorisation requise.
+export const COMPOSE_PROVIDERS = {
+  gmail_web: 'Gmail (dans le navigateur)',
+  outlook_pro_web: 'Outlook / Microsoft 365 (dans le navigateur)',
+  outlook_web: 'Outlook.com / Hotmail (dans le navigateur)',
+  mailto: "Logiciel de messagerie de l'ordinateur",
+};
+export const isComposeProvider = (p) => Object.hasOwn(COMPOSE_PROVIDERS, p || '');
+
+export function composeUrl(provider, msg, { authuser } = {}) {
+  const body = [msg.body, msg.signature].filter((x) => x && String(x).trim()).join('\n\n');
+  const q = (o) => Object.entries(o).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  if (provider === 'gmail_web') return `https://mail.google.com/mail/?${q({ view: 'cm', fs: '1', authuser, to: msg.to_email, su: msg.subject, body })}`;
+  if (provider === 'outlook_web') return `https://outlook.live.com/mail/0/deeplink/compose?${q({ to: msg.to_email, subject: msg.subject, body })}`;
+  if (provider === 'outlook_pro_web') return `https://outlook.office.com/mail/deeplink/compose?${q({ to: msg.to_email, subject: msg.subject, body })}`;
+  return `mailto:${encodeURIComponent(msg.to_email)}?${q({ subject: msg.subject, body: body.replace(/\n/g, '\r\n') })}`;
+}
+
 // Plafonds quotidiens publiés par les fournisseurs (marges de sécurité incluses).
 export function providerHardCap(provider, email = '') {
   const d = domainOf(email) || '';
+  if (provider === 'gmail_web') return 400;
+  if (provider === 'outlook_web') return 250;
+  if (provider === 'outlook_pro_web' || provider === 'mailto') return 500;
   if (provider === 'gmail') return d === 'gmail.com' || d === 'googlemail.com' ? 400 : 1500;
   if (provider === 'outlook') return ['outlook.com', 'outlook.fr', 'hotmail.com', 'hotmail.fr', 'live.com', 'live.fr'].includes(d) ? 250 : 2000;
   return 500;
@@ -41,6 +63,7 @@ export function sendingStats() {
 
 export function currentAccount() {
   const provider = getSetting('sending').provider;
+  if (isComposeProvider(provider)) return { provider, email: getSetting('profile').email || null, compose: true };
   if (provider === 'gmail' || provider === 'outlook') {
     const t = getSecret(`oauth_tokens_${provider}`, { json: true });
     return t ? { provider, email: t.email, name: t.name } : null;
@@ -130,13 +153,26 @@ function classifyError(err) {
   return 'technique';
 }
 
+function finalizeSent(msg, provider, result, origin) {
+  const ts = now();
+  update('messages', msg.id, {
+    status: 'envoyee', sent_at: ts, validated_at: msg.validated_at || ts, queued: 0, error: null,
+    provider, provider_message_id: result.provider_message_id || null, provider_thread_id: result.provider_thread_id || null, rfc_message_id: result.rfc_message_id || null,
+    delivery_status: result.delivery_status, updated_at: ts,
+  });
+  insert('send_log', { message_id: msg.id, provider, ok: 1, created_at: ts });
+  if (msg.campaign_id) update('campaigns', msg.campaign_id, { consecutive_errors: 0, updated_at: ts });
+  logEvent('message', msg.id, 'envoye', { origin, provider, to: msg.to_email }, msg.establishment_id);
+  setStatus(msg.establishment_id, 'envoyee');
+}
+
 export class SendBlocked extends Error {
   constructor(message, details = {}) { super(message); this.status = 409; this.details = details; }
 }
 
 // Envoi d'un message. Appelée uniquement depuis une action explicite de l'utilisateur
 // (« Envoyer cet e-mail ») ou depuis la file des messages qu'il a lui-même validés un par un.
-export async function sendMessage(id, { origin = 'manuel', confirmUncertain = false } = {}) {
+function preflight(id, { origin = 'manuel', confirmUncertain = false, compose = false } = {}) {
   const msg = hydrateMessage(get('SELECT * FROM messages WHERE id = ?', id));
   if (!msg) throw Object.assign(new Error('Message introuvable'), { status: 404 });
   if (msg.status === 'envoyee') throw new SendBlocked('Ce message a déjà été envoyé.');
@@ -152,9 +188,14 @@ export async function sendMessage(id, { origin = 'manuel', confirmUncertain = fa
 
   const sending = getSetting('sending');
   const provider = sending.provider;
-  if (!transports[provider]) throw new SendBlocked('Aucune messagerie connectée (Paramètres > Messagerie).');
+  if (compose) {
+    if (!isComposeProvider(provider)) throw new SendBlocked('Choisissez « Ma messagerie dans le navigateur » dans Paramètres > Messagerie.');
+  } else {
+    if (isComposeProvider(provider)) throw new SendBlocked('Envoi direct indisponible : utilisez « Ouvrir dans ma messagerie ».');
+    if (!transports[provider]) throw new SendBlocked('Aucune messagerie connectée (Paramètres > Messagerie).');
+  }
   const account = currentAccount();
-  if (!account?.email) throw new SendBlocked('Messagerie non connectée ou adresse d\'expédition inconnue.');
+  if (!compose && !account?.email) throw new SendBlocked('Messagerie non connectée ou adresse d\'expédition inconnue.');
 
   const stats = sendingStats();
   if (stats.remaining_today <= 0) throw new SendBlocked(`Plafond quotidien atteint (${stats.daily_cap} messages). Reprise possible demain.`);
@@ -166,11 +207,17 @@ export async function sendMessage(id, { origin = 'manuel', confirmUncertain = fa
     if (sentInCampaign >= campaignCap) throw new SendBlocked(`Plafond de la campagne atteint (${campaignCap} messages).`);
   }
   const minGap = origin === 'file' ? Number(sending.min_interval_seconds) || 30 : 5;
-  if (stats.last_sent_at) {
+  // En messagerie web, c'est l'utilisateur qui envoie : pas d'intervalle imposé.
+  if (!compose && stats.last_sent_at) {
     const wait = Math.ceil(minGap - (Date.now() - Date.parse(stats.last_sent_at)) / 1000);
     if (wait > 0) throw new SendBlocked(`Intervalle minimal entre deux envois : réessayez dans ${wait} s.`, { retry_in: wait });
   }
 
+  return { msg, sending, provider, account };
+}
+
+export async function sendMessage(id, { origin = 'manuel', confirmUncertain = false } = {}) {
+  const { msg, sending, provider, account } = preflight(id, { origin, confirmUncertain });
   // Verrouillage atomique : un double clic ou deux onglets ne peuvent pas envoyer deux fois.
   const claimed = run(`UPDATE messages SET status = 'envoi_en_cours', attempts = attempts + 1, updated_at = ?
     WHERE id = ? AND status IN ('a_valider','brouillon','validee','erreur')
@@ -182,16 +229,7 @@ export async function sendMessage(id, { origin = 'manuel', confirmUncertain = fa
   try {
     const { raw, messageId } = await buildMime(msg, account, { parent });
     const result = await transports[provider](raw, { to: msg.to_email, from: account.email, threadId: parent?.provider_thread_id });
-    const ts = now();
-    update('messages', id, {
-      status: 'envoyee', sent_at: ts, validated_at: msg.validated_at || ts, queued: 0, error: null,
-      provider, provider_message_id: result.provider_message_id, provider_thread_id: result.provider_thread_id, rfc_message_id: messageId,
-      delivery_status: 'accepte', updated_at: ts,
-    });
-    insert('send_log', { message_id: id, provider, ok: 1, created_at: ts });
-    if (msg.campaign_id) update('campaigns', msg.campaign_id, { consecutive_errors: 0, updated_at: ts });
-    logEvent('message', id, 'envoye', { origin, provider, to: msg.to_email }, msg.establishment_id);
-    setStatus(msg.establishment_id, 'envoyee');
+    finalizeSent(msg, provider, { ...result, rfc_message_id: messageId, delivery_status: 'accepte' }, origin);
     return { ok: true, message: hydrateMessage(get('SELECT * FROM messages WHERE id = ?', id)) };
   } catch (err) {
     const kind = classifyError(err);
@@ -214,11 +252,40 @@ export async function sendMessage(id, { origin = 'manuel', confirmUncertain = fa
   }
 }
 
+// Étape 1 : contrôles complets puis ouverture du brouillon pré-rempli dans la messagerie.
+export function openCompose(id) {
+  const { msg, provider } = preflight(id, { compose: true, confirmUncertain: true });
+  const claimed = run(`UPDATE messages SET status = 'envoi_en_cours', provider = ?, attempts = attempts + 1, error = NULL, updated_at = ?
+    WHERE id = ? AND status IN ('a_valider','brouillon','validee','erreur')
+    AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.id != messages.id AND lower(o.to_email) = lower(messages.to_email) AND o.kind = 'initial' AND messages.kind = 'initial' AND o.status IN ('envoyee','envoi_en_cours'))`,
+  provider, now(), id).changes;
+  if (claimed !== 1) throw new SendBlocked('Ouverture refusée : message déjà en cours, déjà envoyé, ou adresse déjà sollicitée.');
+  logEvent('message', id, 'ouvert_messagerie', { provider, to: msg.to_email }, msg.establishment_id);
+  return { url: composeUrl(provider, msg, { authuser: getSetting('profile').email || undefined }), message: hydrateMessage(get('SELECT * FROM messages WHERE id = ?', id)) };
+}
+
+// Étape 2 : l'utilisateur confirme avoir cliqué sur « Envoyer » dans sa messagerie.
+export function confirmComposeSent(id) {
+  const msg = hydrateMessage(get('SELECT * FROM messages WHERE id = ?', id));
+  if (!msg || msg.status !== 'envoi_en_cours' || !isComposeProvider(msg.provider)) throw new SendBlocked('Aucun brouillon ouvert pour ce message.');
+  finalizeSent(msg, msg.provider, { delivery_status: 'inconnu' }, 'messagerie_web');
+  return hydrateMessage(get('SELECT * FROM messages WHERE id = ?', id));
+}
+
+export function cancelCompose(id) {
+  const msg = get('SELECT * FROM messages WHERE id = ?', id);
+  if (!msg || msg.status !== 'envoi_en_cours' || !isComposeProvider(msg.provider)) throw new SendBlocked('Aucun brouillon ouvert pour ce message.');
+  update('messages', id, { status: 'a_valider', provider: null, updated_at: now() });
+  logEvent('message', id, 'envoi_annule', null, msg.establishment_id);
+  return hydrateMessage(get('SELECT * FROM messages WHERE id = ?', id));
+}
+
 // ---- File d'envoi des messages validés individuellement ----
 let timer = null;
 let busy = false;
 
 export function startQueue() {
+  if (isComposeProvider(getSetting('sending').provider)) throw new SendBlocked("L'envoi groupé nécessite une connexion directe (Gmail API). Avec la messagerie web, envoyez les messages un par un depuis l'écran de validation.");
   setSetting('_queue', { running: true, started_at: now(), reason: null });
   logEvent('queue', 0, 'demarree');
 }

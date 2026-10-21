@@ -6,13 +6,14 @@ export default async function campaigns(el, { query, refreshCounts }) {
   const statuses = await api.get('/api/meta/statuses');
 
   async function drawList() {
-    const [list, queue] = await Promise.all([api.get('/api/campaigns'), api.get('/api/queue')]);
+    const [list, queue, composeProviders] = await Promise.all([api.get('/api/campaigns'), api.get('/api/queue'), api.get('/api/compose-providers')]);
+    const composeMode = Object.hasOwn(composeProviders, queue.provider || '');
     el.innerHTML = `
       <div class="page-head"><div><h1>Campagnes</h1><div class="sub">La préparation d'une campagne ne déclenche jamais d'envoi : chaque message attend votre validation.</div></div>
         <div class="actions"><a class="btn primary" href="#/campagnes?new=1">+ Nouvelle campagne</a></div></div>
-      <div class="card"><div class="row between"><div><h2 style="margin-bottom:4px">File d'envoi des messages validés</h2>
+      ${composeMode ? `<div class="alert info">Envoi par ${esc(composeProviders[queue.provider])} : chaque e-mail s'ouvre pré-rempli depuis l'écran <a href="#/validation">Validation</a>, et c'est vous qui cliquez sur Envoyer. ${queue.sent_today}/${queue.daily_cap} envoyés aujourd'hui.</div>` : `<div class="card"><div class="row between"><div><h2 style="margin-bottom:4px">File d'envoi des messages validés</h2>
         <div class="small muted">${queue.queued} message(s) validé(s) un par un en attente · ${queue.sent_today}/${queue.daily_cap} envoyés aujourd'hui · intervalle minimal entre deux envois respecté automatiquement${queue.queue_reason ? ` · Dernier arrêt : ${esc(queue.queue_reason)}` : ''}</div></div>
-        <div class="actions">${queue.queue_running ? '<span class="badge success">En cours</span><button id="q-stop">Arrêter la file</button>' : `<button class="primary" id="q-start" ${queue.queued ? '' : 'disabled'}>Envoyer les ${queue.queued} message(s) validé(s)</button>`}</div></div></div>
+        <div class="actions">${queue.queue_running ? '<span class="badge success">En cours</span><button id="q-stop">Arrêter la file</button>' : `<button class="primary" id="q-start" ${queue.queued ? '' : 'disabled'}>Envoyer les ${queue.queued} message(s) validé(s)</button>`}</div></div></div>`}
       ${list.length ? `<div class="table-wrap"><table><thead><tr><th>Campagne</th><th>Poste visé</th><th>Créée le</th><th>À valider</th><th>Validés</th><th>Envoyés</th><th>Erreurs</th><th>Statut</th><th></th></tr></thead><tbody>
         ${list.map((c) => `<tr><td><b>${esc(c.name)}</b>${c.pause_reason ? `<div class="small" style="color:var(--danger)">${esc(c.pause_reason)}</div>` : ''}</td>
           <td class="small">${esc(m.categories[c.target_category] || '')}<div class="muted">Score min. ${c.min_score}${c.max_messages ? ` · plafond ${c.max_messages}` : ''}</div></td>

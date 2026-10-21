@@ -1,5 +1,5 @@
 import { fetchJson, throttle } from '../util.js';
-import { USER_AGENT } from '../config.js';
+import { UA_HEADERS } from '../config.js';
 import { getSetting } from '../settings.js';
 
 // Géocodage d'une ville ou adresse de départ.
@@ -30,7 +30,7 @@ export async function geocode(query) {
     await throttle('nominatim', 1100);
     const email = getSetting('search').contact_email;
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q=${encodeURIComponent(q)}${email ? '&email=' + encodeURIComponent(email) : ''}`;
-    const data = await fetchJson(url, { headers: { 'User-Agent': USER_AGENT, 'Accept-Language': 'fr' }, timeoutMs: 15000 });
+    const data = await fetchJson(url, { headers: { ...UA_HEADERS, 'Accept-Language': 'fr' }, timeoutMs: 15000 });
     const r = data?.[0];
     if (r) {
       return {

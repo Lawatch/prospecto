@@ -6,7 +6,20 @@ Pensée pour la recherche d'un poste à responsabilités en hôtellerie (directi
 
 > **Aucun e-mail ne part sans votre clic.** La préparation d'une campagne ne déclenche jamais d'envoi ; chaque message passe par l'écran de validation.
 
-## Installation (une seule fois)
+## Ouvrir Prospecto (rien à installer)
+
+**👉 https://lawatch.github.io/prospecto/**
+
+Ouvrez ce lien dans Chrome, Edge ou Firefox, puis ajoutez-le à vos favoris. Pour une icône sur le bureau sans rien installer : faites glisser le petit cadenas situé à gauche de l'adresse vers le bureau (cela crée un simple raccourci internet).
+
+- **Aucune installation, aucun droit administrateur** : tout fonctionne dans le navigateur.
+- **Vos données restent dans ce navigateur**, sur cet ordinateur. Téléchargez régulièrement une sauvegarde (Paramètres > Données et sauvegarde) : un seul fichier, que vous pourrez restaurer sur un autre ordinateur.
+- **Envoi** : chaque candidature s'ouvre pré-remplie dans votre Gmail ou votre Outlook (dans le navigateur) ; vous cliquez sur « Envoyer », puis vous confirmez dans Prospecto. Aucun mot de passe ni configuration.
+- N'ouvrez Prospecto que dans **un seul onglet** à la fois (l'application le vérifie).
+
+Différences avec la version installée : les sites des établissements ne peuvent pas être lus automatiquement par un navigateur (protection CORS). Sur la fiche d'un établissement, utilisez « Coller le texte du site » : Prospecto extrait les adresses, les noms et les signaux du texte copié. L'envoi SMTP et la connexion Outlook directe n'existent que dans la version installée.
+
+## Version installée (facultative, pour un ordinateur personnel)
 
 1. Installez **Node.js** version LTS (22 ou plus récent) : <https://nodejs.org/fr/download>.
 2. Téléchargez ce dossier (bouton « Code > Download ZIP » sur GitHub) et décompressez-le dans un emplacement stable, par exemple `Documents\Prospecto`.
@@ -16,7 +29,7 @@ Pensée pour la recherche d'un poste à responsabilités en hôtellerie (directi
    - **Linux** : `./installer-linux.sh`.
 4. Au premier lancement, choisissez un mot de passe (il protège vos données ; vous restez connecté 30 jours).
 
-## Utilisation quotidienne : deux clics
+### Utilisation quotidienne : deux clics
 
 Double-cliquez sur l'icône **Prospecto** du bureau : le service démarre en arrière-plan (s'il ne tourne pas déjà) et l'application s'ouvre dans votre navigateur à l'adresse <http://127.0.0.1:3737>. Vous pouvez aussi l'ajouter à vos favoris.
 Pour arrêter le service : `launcher\Arreter-Prospecto.vbs` (Windows) ou `node launcher/launcher.js --stop`.

@@ -1,5 +1,5 @@
 import { fetchJson, haversineKm, normalizeUrl, throttle } from '../util.js';
-import { USER_AGENT } from '../config.js';
+import { UA_HEADERS } from '../config.js';
 import { ESTABLISHMENT_TYPES, typeFromOsm } from './catalog.js';
 
 // Recherche d'établissements dans OpenStreetMap via l'API Overpass (gratuite, données sous licence ODbL :
@@ -64,7 +64,7 @@ export async function searchOsm(params) {
       await throttle('overpass', 2000);
       const data = await fetchJson(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': USER_AGENT },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...UA_HEADERS },
         body: 'data=' + encodeURIComponent(query),
         timeoutMs: 90000,
       });

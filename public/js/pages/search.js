@@ -1,4 +1,4 @@
-import { api, meta } from '../api.js';
+import { api, meta, isLocal } from '../api.js';
 import { esc, link, on, scoreBadge, toast, toastError, withBusy, fmtDate, formData } from '../ui.js';
 
 const DEFAULT_TYPES = ['hotel', 'apart_hotel', 'residence_tourisme'];
@@ -76,7 +76,7 @@ export default async function search(el, { query }) {
           <td>${r.in_list ? '' : `<button class="sm" data-add="${r.id}">Ajouter</button>`}</td></tr>`).join('')}
         </tbody></table></div>
       </div>
-      <div class="bulkbar" id="bulk" ${selected.size ? '' : 'hidden'}><b id="bulk-count"></b><button class="primary" id="bulk-add">Ajouter à la liste de prospection</button><button id="bulk-add-enrich">Ajouter et enrichir (contacts, SIRENE)</button></div>
+      <div class="bulkbar" id="bulk" ${selected.size ? '' : 'hidden'}><b id="bulk-count"></b><button class="primary" id="bulk-add">Ajouter à la liste de prospection</button><button id="bulk-add-enrich">${isLocal ? 'Ajouter et enrichir (SIRENE)' : 'Ajouter et enrichir (contacts, SIRENE)'}</button></div>
       <p class="muted small">Données cartographiques © contributeurs OpenStreetMap (ODbL) · Données entreprises : INSEE / INPI via recherche-entreprises.api.gouv.fr</p>`;
     updateBulk();
     if (window.L) {

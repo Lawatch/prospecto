@@ -1,0 +1,12 @@
+{
+  "name": "Prospecto",
+  "short_name": "Prospecto",
+  "description": "Prospection et candidatures spontanées",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#141b2d",
+  "lang": "fr",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

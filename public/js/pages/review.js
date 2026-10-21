@@ -6,7 +6,10 @@ import { badge, confirmDialog, esc, fmtDate, link, on, reliability, scoreBadge, 
 export default async function review(el, { query, refreshCounts }) {
   const m = await meta();
   const statuses = await api.get('/api/meta/statuses');
-  const [templates, allAttachments, campaigns, queue] = await Promise.all([api.get('/api/templates'), api.get('/api/attachments'), api.get('/api/campaigns'), api.get('/api/queue')]);
+  const [templates, allAttachments, campaigns, queue, composeProviders] = await Promise.all([api.get('/api/templates'), api.get('/api/attachments'), api.get('/api/campaigns'), api.get('/api/queue'), api.get('/api/compose-providers')]);
+  // Mode « messagerie web » : l'e-mail s'ouvre pré-rempli dans Gmail/Outlook et c'est vous qui cliquez sur Envoyer.
+  const composeMode = Object.hasOwn(composeProviders, queue.provider || '');
+  const composeLabel = composeProviders[queue.provider] || '';
   let ids = [];
   let index = 0;
   let detail = null;
@@ -54,6 +57,7 @@ export default async function review(el, { query, refreshCounts }) {
   function draw() {
     const { message: msg, establishment: e, contact, contacts, attachments, parent, campaign } = detail;
     const editable = ['a_valider', 'brouillon', 'validee', 'erreur'].includes(msg.status);
+    const pendingCompose = msg.status === 'envoi_en_cours' && Object.hasOwn(composeProviders, msg.provider || '');
     const blocking = msg.warnings.filter((w) => w.level === 'bloquant');
     const used = msg.personalization?.used || {};
     const emailContacts = contacts.filter((c) => c.email);
@@ -82,16 +86,22 @@ export default async function review(el, { query, refreshCounts }) {
               ${allAttachments.map((a) => `<label><input type="checkbox" data-att="${a.id}" ${msg.attachment_ids.includes(a.id) ? 'checked' : ''} ${editable ? '' : 'disabled'}> ${esc(a.label)} <span class="muted small">(${Math.round(a.size / 1024)} Ko)</span></label>`).join('') || '<span class="small muted">Aucune pièce jointe enregistrée. <a href="#/parametres?tab=pieces">Ajouter mon CV</a></span>'}
             </div></div>
           </div>
+          ${composeMode && editable && attachments.length ? `<div class="alert attention" style="margin:0 18px 12px"><b>Pièces jointes :</b> votre messagerie ne peut pas les recevoir automatiquement. Après ouverture du brouillon, joignez-y ${attachments.map((a) => `<a href="/api/attachments/${a.id}/file" data-filename="${esc(a.filename)}">${esc(a.filename)}</a>`).join(', ')} (cliquez pour l'enregistrer d'abord), ou mettez plutôt un lien vers votre CV dans votre profil.</div>` : ''}
           <div class="review-bar">
-            ${editable ? `
-              <button class="success lg" id="send" ${blocking.length ? 'disabled title="Corrigez les points bloquants"' : ''}>Envoyer cet e-mail</button>
-              ${msg.status === 'validee' ? '<button id="unvalidate">Retirer de la file</button>' : `<button id="validate" ${blocking.length ? 'disabled' : ''} title="Le message partira avec la file d'envoi, que vous lancez depuis Campagnes">Valider pour la file</button>`}
+            ${pendingCompose ? `
+              <div style="flex:1;min-width:260px"><b>Brouillon ouvert dans ${esc(composeProviders[msg.provider])}.</b><div class="small">Vérifiez-le, cliquez sur « Envoyer » dans votre messagerie, puis confirmez ici.</div></div>
+              <button class="success lg" id="confirm-sent">J'ai envoyé cet e-mail</button>
+              <button id="reopen">Rouvrir le brouillon</button>
+              <button class="danger" id="cancel-compose">Je ne l'ai pas envoyé</button>` : editable ? `
+              <button class="success lg" id="send" ${blocking.length ? 'disabled title="Corrigez les points bloquants"' : ''} ${composeMode ? `title="S'ouvre pré-rempli dans ${esc(composeLabel)}"` : ''}>Envoyer cet e-mail</button>
+              ${composeMode ? '' : msg.status === 'validee' ? '<button id="unvalidate">Retirer de la file</button>' : `<button id="validate" ${blocking.length ? 'disabled' : ''} title="Le message partira avec la file d'envoi, que vous lancez depuis Campagnes">Valider pour la file</button>`}
               <button id="edit">Modifier</button>
               <button id="save" ${dirty ? '' : 'disabled'}>Enregistrer</button>
               <button id="draft">Enregistrer comme brouillon</button>
               <button class="danger" id="ignore">Ignorer ce prospect</button>
               <span class="spacer" style="flex:1"></span>
-              <button id="skip">Passer au suivant →</button>` : `<div class="small">Ce message est « ${esc(statuses.messages[msg.status])} » et ne peut plus être modifié.</div><span style="flex:1"></span><button id="skip">Passer au suivant →</button>`}
+              <button id="skip">Passer au suivant →</button>
+              ${composeMode ? `<div class="small muted" style="width:100%">« Envoyer » ouvre l'e-mail pré-rempli dans ${esc(composeLabel)} : c'est vous qui cliquez sur Envoyer, puis vous confirmez ici.</div>` : ''}` : `<div class="small">Ce message est « ${esc(statuses.messages[msg.status])} » et ne peut plus être modifié.</div><span style="flex:1"></span><button id="skip">Passer au suivant →</button>`}
           </div>
         </div>
         <div>
@@ -174,7 +184,25 @@ export default async function review(el, { query, refreshCounts }) {
       if (dirty && !(await confirmDialog('Régénérer', 'Vos modifications manuelles seront remplacées par le contenu du modèle. Continuer ?'))) return;
       try { detail = await api.post(`/api/messages/${detail.message.id}/regenerate`, { template_id: Number($('#tpl').value) }); dirty = false; draw(); } catch (err) { toastError(err); }
     });
+    const openDraft = (url) => {
+      if (url.startsWith('mailto:')) { location.href = url; return true; }
+      const w = window.open(url, '_blank');
+      if (w) { try { w.opener = null; } catch { /* sans effet */ } return true; }
+      lastResult = { kind: 'attention', text: 'Votre navigateur a bloqué l\'ouverture d\'un nouvel onglet. Cliquez sur « Rouvrir le brouillon ».' };
+      return false;
+    };
     $('#send')?.addEventListener('click', async (ev) => {
+      if (composeMode) {
+        try {
+          await saveIfDirty();
+          if (detail.message.warnings.some((w) => w.level === 'bloquant')) { draw(); return toastError(new Error('Corrigez d\'abord les points bloquants.')); }
+          const r = await api.post(`/api/messages/${detail.message.id}/compose`);
+          lastResult = null;
+          openDraft(r.url);
+          await show(index);
+        } catch (err) { lastResult = { kind: 'bloquant', text: err.message }; show(index); }
+        return;
+      }
       try {
         await saveIfDirty();
         const blocking = detail.message.warnings.filter((w) => w.level === 'bloquant');
@@ -203,6 +231,15 @@ export default async function review(el, { query, refreshCounts }) {
           show(index);
         }
       }
+    });
+    $('#confirm-sent')?.addEventListener('click', async () => {
+      try { await api.post(`/api/messages/${detail.message.id}/confirm-sent`); advance({ kind: 'success', text: `✓ Envoi confirmé pour ${detail.establishment.name} (${detail.message.to_email}).` }); } catch (err) { toastError(err); }
+    });
+    $('#reopen')?.addEventListener('click', async () => {
+      try { const r = await api.post(`/api/messages/${detail.message.id}/compose`); lastResult = null; openDraft(r.url); draw(); } catch (err) { toastError(err); }
+    });
+    $('#cancel-compose')?.addEventListener('click', async () => {
+      try { await api.post(`/api/messages/${detail.message.id}/cancel-compose`); lastResult = { kind: 'info', text: 'Envoi annulé : le message reste à valider.' }; show(index); } catch (err) { toastError(err); }
     });
     $('#validate')?.addEventListener('click', async () => {
       try { await saveIfDirty(); await api.post(`/api/messages/${detail.message.id}/validate`); advance({ kind: 'success', text: `✓ « ${detail.establishment.name} » validé : il partira avec la file d'envoi (à lancer depuis Campagnes).` }); } catch (err) { toastError(err); show(index); }

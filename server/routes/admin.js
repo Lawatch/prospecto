@@ -122,7 +122,7 @@ export function adminRoutes(app) {
       stats: stats.funnel,
       sending: sendingStats(),
       todo: {
-        to_validate: get("SELECT count(*) AS n FROM messages WHERE status = 'a_valider'").n,
+        to_validate: get("SELECT count(*) AS n FROM messages WHERE status = 'a_valider' OR (status = 'envoi_en_cours' AND provider IN ('gmail_web','outlook_web','outlook_pro_web','mailto'))").n,
         drafts: get("SELECT count(*) AS n FROM messages WHERE status = 'brouillon'").n,
         errors: get("SELECT count(*) AS n FROM messages WHERE status = 'erreur'").n,
         followups_due: followups.filter((f) => f.is_due && !f.pending_followup_id).length,

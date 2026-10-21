@@ -1,17 +1,18 @@
-import { api } from '../api.js';
+import { api, isLocal } from '../api.js';
 import { esc, fmtDate, badge } from '../ui.js';
 
 const kpi = (label, value, hint = '') => `<div class="kpi"><div class="label">${label}</div><div class="value">${value ?? '—'}</div>${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
 const pct = (v) => (v == null ? '—' : `${String(v).replace('.', ',')} %`);
 
 export default async function dashboard(el) {
-  const [d, statuses] = await Promise.all([api.get('/api/dashboard'), api.get('/api/meta/statuses')]);
+  const [d, statuses, local] = await Promise.all([api.get('/api/dashboard'), api.get('/api/meta/statuses'), isLocal ? api.get('/api/local/info') : null]);
+  const backupLate = local && d.stats.identified > 0 && (!local.last_download || Date.now() - Date.parse(local.last_download) > 7 * 86400e3);
   const s = d.stats;
   const t = d.todo;
   const setupSteps = [
     { ok: d.setup.profile_ok, text: 'Compléter votre profil (nom, présentation, réalisations)', href: '#/parametres?tab=profil' },
     { ok: d.setup.cv_ok, text: 'Ajouter votre CV (pièce jointe ou lien)', href: '#/parametres?tab=pieces' },
-    { ok: d.setup.mail_ok, text: 'Connecter votre messagerie (Gmail, Outlook ou SMTP)', href: '#/parametres?tab=messagerie' },
+    { ok: d.setup.mail_ok, text: isLocal ? 'Choisir votre messagerie (Gmail ou Outlook dans le navigateur)' : 'Connecter votre messagerie (Gmail, Outlook ou SMTP)', href: '#/parametres?tab=messagerie' },
     { ok: s.in_list > 0, text: 'Lancer une première recherche et constituer une liste', href: '#/recherche' },
   ];
   const setupLeft = setupSteps.filter((x) => !x.ok);
@@ -28,6 +29,7 @@ export default async function dashboard(el) {
   el.innerHTML = `
     <div class="page-head"><div><h1>Tableau de bord</h1><div class="sub">Vue d'ensemble de votre prospection</div></div>
       <div class="actions"><a class="btn" href="#/recherche">Rechercher des établissements</a><a class="btn primary" href="#/campagnes?new=1">Préparer une campagne</a></div></div>
+    ${backupLate ? `<div class="alert attention">Vos données sont enregistrées dans ce navigateur. ${local.last_download ? 'Votre dernière sauvegarde date de plus de 7 jours' : 'Vous n\'avez encore jamais téléchargé de sauvegarde'} : <a href="#/parametres?tab=donnees">télécharger une sauvegarde</a>.</div>` : ''}
     ${setupLeft.length ? `<div class="card"><h2>Pour bien démarrer</h2>${setupSteps.map((x) => `<div class="row" style="margin-bottom:6px">${x.ok ? '<span class="badge success">Fait</span>' : '<span class="badge warning">À faire</span>'} <a href="${x.href}">${x.text}</a></div>`).join('')}</div>` : ''}
     <div class="grid cols-4" style="margin-bottom:16px">
       ${kpi('Établissements identifiés', s.identified, `${s.in_list} dans la liste de prospection`)}

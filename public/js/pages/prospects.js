@@ -1,4 +1,4 @@
-import { api, meta } from '../api.js';
+import { api, meta, isLocal } from '../api.js';
 import { badge, confirmDialog, esc, link, modal, on, options, reliability, scoreBadge, toast, toastError, withBusy, formData } from '../ui.js';
 
 export function jobWatcher(container, jobId, onDone) {
@@ -45,7 +45,7 @@ export default async function prospects(el, { query }) {
     <div class="bulkbar" id="bulk" hidden>
       <b id="bulk-count"></b>
       <button class="primary" data-bulk="campaign">Préparer une campagne</button>
-      <button data-bulk="enrich">Enrichir (SIRENE, site, e-mails)</button>
+      <button data-bulk="enrich">${isLocal ? 'Enrichir (SIRENE : dirigeants, effectifs)' : 'Enrichir (SIRENE, site, e-mails)'}</button>
       <select id="bulk-status" style="width:auto;background:#22293d;color:#fff;border-color:#3a425a">${options(m.statuses, '', { empty: 'Changer le statut…' })}</select>
       <button data-bulk="add_to_list">Ajouter à la liste</button>
       <button data-bulk="remove_from_list">Retirer de la liste</button>

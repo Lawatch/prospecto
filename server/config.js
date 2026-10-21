@@ -15,5 +15,10 @@ export const PORT = Number(process.env.PROSPECTO_PORT || 3737);
 export const HOST = '127.0.0.1';
 export const BASE_URL = `http://${HOST}:${PORT}`;
 export const USER_AGENT = 'Prospecto/0.1 (outil personnel de candidature; contact: voir parametres)';
+// En-têtes d'identification envoyés aux services externes (un navigateur les fixe lui-même).
+export const UA_HEADERS = { 'User-Agent': USER_AGENT };
+// Le serveur peut lire les sites des établissements ; la version navigateur en est empêchée (CORS).
+export const CAN_FETCH_SITES = true;
+export const IS_BROWSER = false;
 
 for (const dir of [DATA_DIR, UPLOAD_DIR, BACKUP_DIR]) fs.mkdirSync(dir, { recursive: true });

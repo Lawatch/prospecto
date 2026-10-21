@@ -2,7 +2,7 @@ import { all, get, insert, logEvent, now, parseJson, run, update } from '../db.j
 import { domainOf, nameKey, normalizeUrl, parseCsv, toCsv, isValidEmail, parseIntSafe } from '../util.js';
 import { runSearch, searchResults } from '../services/search.js';
 import { deleteEstablishment, getEstablishment, hydrate, listContacts, recomputeScore, setStatus, upsertEstablishment } from '../services/establishments.js';
-import { enrichEstablishment } from '../services/enrich.js';
+import { enrichEstablishment, enrichFromPastedText } from '../services/enrich.js';
 import { addOpposition, checkMx, refreshReliability, setPrimary, upsertContact } from '../services/contacts.js';
 import { hunterVerify, hasHunterKey } from '../services/hunter.js';
 import { hydrateMessage } from '../services/campaigns.js';
@@ -213,6 +213,10 @@ export function prospectRoutes(app) {
 
   app.post('/api/establishments/:id/enrich', async (req, res) => {
     res.json(await enrichEstablishment(Number(req.params.id), { steps: req.body?.steps }));
+  });
+
+  app.post('/api/establishments/:id/paste-site', (req, res) => {
+    res.json(enrichFromPastedText(Number(req.params.id), { text: req.body?.text, url: req.body?.url }));
   });
 
   app.post('/api/establishments/:id/signals', (req, res) => {

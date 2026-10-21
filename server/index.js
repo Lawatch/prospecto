@@ -10,7 +10,7 @@ import { run } from './db.js';
 openDb();
 seedTemplates();
 // Un envoi interrompu par un arrêt brutal ne doit jamais être relancé automatiquement.
-run("UPDATE messages SET status = 'erreur', error = 'Envoi interrompu (arrêt de l''application) : résultat incertain, vérifiez le dossier « Envoyés » avant tout nouvel essai.' WHERE status = 'envoi_en_cours'");
+run("UPDATE messages SET status = 'erreur', error = 'Envoi interrompu (arrêt de l''application) : résultat incertain, vérifiez le dossier « Envoyés » avant tout nouvel essai.' WHERE status = 'envoi_en_cours' AND coalesce(provider, '') NOT IN ('gmail_web','outlook_web','outlook_pro_web','mailto')");
 try { dailyBackupIfNeeded(); } catch (err) { console.error('Sauvegarde automatique impossible :', err.message); }
 setInterval(() => { try { dailyBackupIfNeeded(); } catch { /* réessai à l'heure suivante */ } }, 3600_000).unref();
 

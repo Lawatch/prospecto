@@ -21,7 +21,8 @@ export function nameSimilarity(a, b) {
   if (!ta.size || !tb.size) return 0;
   let inter = 0;
   for (const t of ta) if (tb.has(t)) inter++;
-  return inter / Math.min(ta.size, tb.size);
+  // Rapporté au plus long des deux noms : « Hôtel Lac » et « Hôtel Lac Annecy » ne sont pas identiques.
+  return inter / Math.max(ta.size, tb.size);
 }
 
 export function haversineKm(lat1, lon1, lat2, lon2) {
