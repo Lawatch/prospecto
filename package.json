@@ -1,0 +1,23 @@
+{
+  "name": "prospecto",
+  "version": "0.1.0",
+  "description": "Outil personnel de prospection et de candidatures spontanées avec validation humaine avant chaque envoi",
+  "private": true,
+  "type": "module",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "launch": "node --disable-warning=ExperimentalWarning launcher/launcher.js",
+    "stop": "node launcher/launcher.js --stop",
+    "reset-password": "node --disable-warning=ExperimentalWarning launcher/reinitialiser-mot-de-passe.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "leaflet": "^1.9.4",
+    "nodemailer": "^10.1.7"
+  }
+}
